@@ -1,0 +1,301 @@
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+
+dat <- read.csv("~/bcyc.csv", header=T)
+idx <- read.csv("~/idx.csv", header=T)
+
+tot = dim(dat)[1]
+tm = dim(dat)[2]
+
+id = matrix(0, nrow=tot, ncol=tm)
+dt = matrix(NA, nrow=tot, ncol=tm)
+
+for(i in 1:tm)
+{
+	for(j in 1:tot)
+	{
+		if(is.na(idx[j,i])) {
+			break
+		} else {
+			k = idx[j,i]
+			id[k,i] = 1
+			#ids[k,i] = 
+			dt[k,i] = dat[j,i]
+		}
+	}
+}
+
+
+x_dt <- list()
+
+for(i in 1:tot)
+{
+	tt = sum(id[i,])
+
+	x_dt[[i]] = matrix(NA, nrow=tt, ncol=1)
+	q = 1
+
+	for(j in 1:tm)
+	{
+		if(id[i,j] == 1) 
+		{
+			x_dt[[i]][q,1] = dt[i,j]
+			q = q + 1
+		}
+	}
+	#cat("q for row: ",i," is: ",q-1, "\n")
+	#cat("dim x is: ",tt, "\n")
+}
+
+runFP <- function(x, dm, r_u, r_v, iter) {
+
+	U_t <- list()
+	v_t <- list()
+
+	U = matrix(runif(tm*dm), nrow=dm, ncol=tm)
+
+	v_ = matrix(runif(dm), nrow=dm, ncol=1)
+
+
+	U_t[["a"]] = U
+	v_t[["a"]] = v_
+
+	for(p in 1:20)
+	{
+	for(i in 1:tot)
+	{
+
+		tt = sum(id[i,])
+
+		U_o = matrix(NA, nrow=dm, ncol=tt)
+
+		for(q in 1:dm) {k=1; for(j in 1:tm) { if(id[i,j] == 1) {U_o[q,k] = U[q,j]; k = k+1} } }
+
+		v_o = v_
+
+		x_ = x[[i]]
+
+		for(j in 1:iter)
+		{
+			inv_ = solve( r_v*diag(1,dm) + (U_o %*% t(U_o)) )
+			v_n = inv_ %*% (r_v*v_o + U_o %*% x_)
+
+			inv_ = solve( r_u*diag(1,dm) + v_n %*% t(v_n) )
+			U_n = inv_ %*% (r_u*U_o + v_n %*% t(x_))
+
+			U_o = U_n
+			v_o = v_n
+		}
+
+		v_ = v_n
+
+		for(q in 1:dm) {k=1; for(j in 1:tm) { if(id[i,j] == 1) {U[q,j] = U_o[q,k]; k = k+1} } }
+
+		U_t[[i]] = U
+		v_t[[i]] = v_
+	}
+	}
+	return (list(U=U, v=v_, U_t=U_t, v_t=v_t))
+}
+
+r = runFP(x_dt, 11, 3, 5e-4, 1000)
+
+sAll = matrix(NA, nrow=tot, ncol=tm)
+
+for(i in 1:tot) sAll[i,] = t( t(r$U) %*% r$v_t[[i]] )
+
+#write.csv(sAll, file= "~/sAll_n.csv", row.names=FALSE, col.names=FALSE)
+
+#U = t(r$U)
+#Un = U[1:154,]
+#dt = read.csv("~/sAll_n.csv",header=T)
+
+dt = data.frame(sAll)
+
+a_x = read.csv("~/a_idx.csv",header=F)
+
+b_x = read.csv("~/b_idx.csv",header=F)
+
+q_x = read.csv("~/q_idx.csv",header=F)
+
+d_x = read.csv("~/d_idx.csv",header=F)
+
+
+I_F	= dim(q_x)[1]
+I_S	= dim(dt)[2]-I_F
+T	= dim(dt)[1]
+I_F_n1	= I_F - sum(b_x[,1])
+
+n_x = 4
+n_F = 7
+n_St = 11
+
+y1=dt[,1:I_F]
+
+dm2 = dim(dt)[2]
+y2=dt[,(I_F+1):dm2]
+
+beta = 0.99
+
+s_code <- '
+data {
+	int I_F;
+	int I_S;
+	int I_F_n1;
+	int T;
+	int n_St;
+	int n_F;
+	int n_x;
+	int a[I_F];		//indexes of the non-zero elts of each row from 1 to 154
+	int b[I_F];		//value of the non-zero elts: 1-anchor; 0-parameter to be estimated
+	int q[I_F];		//non-zero and non-one element positions within lambda_F
+	int d[I_F];		//direction of factor loading
+
+	matrix[T,I_F] y1;	
+	vector[I_S] y2[T];
+}
+parameters {
+	vector[n_St] S_t[T];
+	vector<lower=0>[I_F_n1] lambda_F;	//non-zero params, with fixed ones (total=5) taken out of the 158 total
+
+	vector[n_St] 	phi[n_F];
+	vector[n_F] 	p_mu;
+
+	vector[n_St] lambda_S[I_S];
+
+	vector<lower=0>[I_F] 	sigma_1;
+	vector<lower=0>[I_S] 	sigma_2;
+
+	vector<lower=0, upper=1>[4] rho;
+
+	real lf_m;
+	real ls_m;
+
+	real mu_s;
+}
+model {
+
+	lf_m ~ normal(0,1);
+	ls_m ~ normal(0,1);
+
+	lambda_F ~ normal(lf_m, 1);
+	
+	for(i in 1:I_S) lambda_S[i] ~ normal(ls_m, 1);
+
+	rho ~ beta(11, 11);
+
+	mu_s ~ normal(0, 2);
+
+	for(k in 1:n_F) phi[k] ~ normal(p_mu[k], 1);
+
+	{
+		vector[I_F] epsilon;
+		vector[I_S] epsilon2;
+
+		S_t[1] ~ normal(mu_s, 1);
+
+		for(i in 2:T) {
+
+			for(k in 1:n_F) S_t[i][k] ~ normal(to_row_vector(phi[k])*S_t[i-1], 1);
+			for(k in (n_F+1):n_St) S_t[i][k] ~ normal(rho[k - n_F]*S_t[i-1][k], 1);
+
+
+			for(j in 1:I_F) {
+
+				if(b[j] == 0) 	
+					y1[i,j] ~ normal(d[j]*lambda_F[q[j] ]*to_row_vector(phi[a[j] ])*S_t[i], sigma_1[j]);
+				else		
+					y1[i,j] ~ normal(d[j]*to_row_vector(phi[a[j] ])*S_t[i], sigma_1[j]);
+			}
+			for(j in 1:I_S) y2[i][j] ~ normal(to_row_vector(lambda_S[j])*S_t[i], sigma_2[j]);
+
+		}
+	}
+}
+generated quantities {
+	vector[I_F+I_S] epsilon[T];
+
+	for(i in 1:T)
+	{
+		for(k in 1:I_F) 
+		{
+			if(b[k] == 0)
+				epsilon[i][k] = y1[i,k] - lambda_F[q[k] ]*to_row_vector(phi[a[k] ])*S_t[i];
+			else
+				epsilon[i][k] = y1[i,k] - to_row_vector(phi[a[k] ])*S_t[i];
+		}
+		for(k in 1:I_S)  epsilon[i][k+I_F] = y2[i][k] - to_row_vector(lambda_S[k])*S_t[i];
+	}
+}
+'
+
+dat1 <- list(I_F=I_F, I_S=I_S, I_F_n1=I_F_n1, T=T, n_x=n_x, n_F=n_F, n_St=n_St, y1=as.matrix(y1), y2=as.matrix(y2), beta=beta, a=a_x[,1], b=b_x[,1], q=q_x[,1], d=d_x[,1])
+
+fit3 <- stan(model_code = s_code, data = dat1, iter = 4000, control = list(adapt_delta = 0.99, stepsize = 0.2), chains = 2)
+
+es = extract(fit3)
+
+T=25
+I_F=114
+I_S=32
+n_St=11
+
+s_code2 <- '
+data {
+	int samps;
+	int I_F;
+	int I_S;
+	int T;
+	int n_St;
+
+	matrix[T,n_St] 	  S_t[samps];
+	matrix[T,I_F+I_S] errs[samps];
+}
+parameters {
+	vector[n_St] 	D[4];
+
+	vector<lower=0, upper=1>[I_F+I_S] e_rho;
+	vector<lower=0>[I_F+I_S]	  e_sig;
+
+	real<lower=0, upper=1> 	h_form;
+	real<lower=0> 		sig_c;	//Curvature of Utility function
+	real<lower=0>		lmb_w;	//Wage mark-up: fixed at 0.5 for U.S.
+
+	real<lower=0> cons_sig;
+	real<lower=0> sig_d;
+}
+model {
+
+	h_form ~ beta(5, 5);
+	e_rho ~ beta(5, 5);
+
+	sig_c ~ normal(0, 1);
+	lmb_w ~ normal(0, 1);
+
+	e_sig ~ normal(0, 2);
+	sig_d ~ normal(0, 2);
+	cons_sig ~ normal(0, 2);
+
+	for(i in 1:4) D[i] ~ normal(0, 1);
+
+	for(s in 1:samps)
+	{
+		for(t in 1:(T-2))
+		{
+			for(r in 1:4) S_t[s][t+2,r] ~ normal(to_row_vector(D[r])*to_vector(S_t[s][t,]), sig_d);
+
+			for(k in 1:(I_F+I_S)) errs[s][t+1,k] ~ normal(e_rho[k]*errs[s][t,k], e_sig[k]);
+
+			S_t[s][t+1,8] ~ normal(S_t[s][t+1,1] - h_form*S_t[s][t,1]/(1+h_form) - S_t[s][t+2,1]/(1+h_form) - (sig_c - 1)*(S_t[s][t+1,2] - S_t[s][t+2,2])/(sig_c*(1+lmb_w)*(1+h_form)) + (1 - h_form)*(S_t[s][t+1,6] - S_t[s][t+2,3])/(sig_c*(1+h_form)), cons_sig);
+		}
+	}
+}
+'
+
+dat2 = list(I_F=I_F, I_S=I_S, T=T, n_St=n_St, S_t=as.array(es$S_t[1:2000,,]), errs=as.array(es$epsilon[1:2000,,]), samps=2000)
+
+fit_s2 <- stan(model_code = s_code2, data = dat2, iter = 2000, control = list(adapt_delta = 0.99, stepsize = 0.2), chains = 2)
+
+
