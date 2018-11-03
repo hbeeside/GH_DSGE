@@ -1,7 +1,9 @@
+The code for this DSGE project begins with a preprocessing step to preprocess the data before feeding it to the R code that does the Matrix Factorization step and subsequently runs the MCMC steps. These individual steps are described in further detail, below.
+
 1. VBA Script:
 ______________
 
-(i) To run the VBA script, first clear the contents of all the worksheets in the file, excedpt the first 3 worksheets, namely "filteredData__", "Concepts", and "data_transpose". 
+(i) To run the VBA script, first clear the contents of all the worksheets in the file named "filteredData_New.xlsm", except the first 3 worksheets, namely "filteredData__", "Concepts", and "data_transpose". 
 
 (ii) Once clearing all the worksheets and leaving in the ones named in the step above, click the "View" tab on the spreadsheet, choose "Macros", and then choose "View Macros" from the drop-down tab. You'll see "Module1.tst1", highlight that and choose either "Run" to run it right away, or choose "Edit" to view it and then subsequently run it.
 
